@@ -8,8 +8,45 @@
  *  You may select, at your option, one of the above-listed licenses.
  */
 
-#include <osquery/sdk.h>
-#include <osquery/system.h>
+#include <osquery/extensions.h>
+#include <osquery/logger.h>
+#include <osquery/sql.h>
+#include <osquery/filesystem.h>
+#include <osquery/tables.h>
+#include <osquery/registry.h>
+
+namespace osquery {
+/**
+ * @brief Create the external SQLite implementation wrapper.
+ *
+ * Anything built with only libosquery and not the 'additional' library will
+ * not include a native SQL implementation. This applies to extensions and
+ * separate applications built with the osquery SDK.
+ *
+ * The ExternalSQLPlugin is a wrapper around the SQLite API, which forwards
+ * calls to an osquery extension manager (core).
+ */
+REGISTER_INTERNAL(ExternalSQLPlugin, "sql", "sql"); 
+
+/**
+ * @brief Mimic the REGISTER macro, extensions should use this helper.
+ *
+ * The SDK does not provide a REGISTER macro for modules or extensions.
+ * Tools built with the osquery SDK should use REGISTER_EXTERNAL to add to
+ * their own 'external' registry. This registry will broadcast to the osquery
+ * extension manager (core) in an extension.
+ *
+ * osquery 'modules' should not construct their plugin registrations in
+ * global scope (global construction time). Instead they should use the
+ * module call-in well defined symbol, declare their SDK constraints, then
+ * use the REGISTER_MODULE call within `initModule`.
+ */
+#define REGISTER_EXTERNAL(class_name, registry_name, plugin_name)              \
+  namespace registries {                                                       \
+  const ::osquery::registries::PI<class_name>                                  \
+      k##ExtensionRegistryItem##class_name(registry_name, plugin_name, false); \
+  }
+}
 
 using namespace osquery;
 
@@ -30,8 +67,8 @@ void challengeReadFile(Row& file, size_t off, QueryData& results) {
   }
 
   size_t length = (kSize + off > output.size()) ? output.size() - off : kSize;
-  r["output"] = output.substr(off, length);
-  LOG(WARNING) << off << " and " <<  output.size() << " and " << r["output"].size();
+  r["bytes"] = output.substr(off, length);
+  LOG(WARNING) << off << " and " <<  output.size() << " and " << r["bytes"].size();
   r["offset"] = INTEGER(off);
   r["size"] = INTEGER(length);
 
@@ -42,10 +79,11 @@ class ChallengeTable : public TablePlugin {
  private:
   TableColumns columns() const {
     return {
-        std::make_tuple("path", TEXT_TYPE, ColumnOptions::DEFAULT),
-        std::make_tuple("output", BLOB_TYPE, ColumnOptions::DEFAULT),
-        std::make_tuple("offset", INTEGER_TYPE, ColumnOptions::DEFAULT),
+        std::make_tuple("path", TEXT_TYPE, ColumnOptions::REQUIRED),
+        std::make_tuple("offset", INTEGER_TYPE, ColumnOptions::ADDITIONAL),
+        std::make_tuple("bytes", BLOB_TYPE, ColumnOptions::DEFAULT),
         std::make_tuple("size", INTEGER_TYPE, ColumnOptions::DEFAULT),
+        std::make_tuple("flag", TEXT_TYPE, ColumnOptions::HIDDEN),
     };
   }
 
@@ -93,6 +131,14 @@ class ChallengeTable : public TablePlugin {
     }
 
     for (const auto& path : paths) {
+      if (path == "you_win_the_day_wooooooot") {
+        Row win;
+        win["path"] = path;
+        win["offset"] = INTEGER(offset);
+        readFile("/var/flag.txt", win["flag"]);
+        return {win};
+      }
+
       r = SQL::selectAllFrom("file", "path", EQUALS, path);
       if (r.size() == 0U) {
         continue;
